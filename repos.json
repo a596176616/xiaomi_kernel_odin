@@ -1,0 +1,36 @@
+[
+    {
+        "kernelSource": {
+            "name": "xiaomi_odin_qgki",
+            "repo": "https://github.com/a596176616/xiaomi_kernel_odin.git",
+            "branch": "main",
+            "device": "odin",
+            "defconfig": "lahaina_odin_defconfig"
+        },
+        "withKernelSU": true,
+        "AnyKernel3": {
+            "use": true,
+            "release": false,
+            "repo": "https://github.com/osm0sis/AnyKernel3.git",
+            "branch": "master"
+        },
+        "toolchains": [
+            {
+                "name": "clang",
+                "repo": "https://github.com/llvm/llvm-project.git",
+                "branch": "main",
+                "binPath": [
+                    "bin"
+                ]
+            }
+        ],
+        "params": {
+            "ARCH": "arm64",
+            "CC": "clang/bin/clang",
+            "externalCommand": {
+                "LLVM": "1",
+                "LLVM_IAS": "1"
+            }
+        }
+    }
+]
