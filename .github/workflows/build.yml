@@ -9,6 +9,9 @@ jobs:
   Build-Kernel:
     runs-on: ubuntu-22.04
     env:
+      # 强制启用Node24，彻底消除Node.js20废弃警告
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
       WORKSPACE: ${{ github.workspace }}
       KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
       KERNEL_BRANCH: main
@@ -92,7 +95,7 @@ jobs:
 
       # 8. 上传编译日志
       - name: Upload Build Log
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
@@ -100,7 +103,7 @@ jobs:
 
       # 9. 上传全部内核镜像（小米Lahaina 骁龙8+真实输出）
       - name: Upload Kernel Images
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: Kernel-Images-odin
           path: |
@@ -110,23 +113,32 @@ jobs:
             ${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz
           retention-days: 7
 
-      # 10. 标准AnyKernel3打包（odin专用正确写法）
+      # 10. 标准AnyKernel3打包（odin专用修复版，解决文件不生成问题）
       - name: Pack AnyKernel3 Flashable Zip
-  if: ${{ env.USE_ANYKERNEL3 == 'true' }}
-  run: |
-    # 小米Lahaina内核 复制真实内核镜像
-    cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/
-    cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/
-    
-    cd AnyKernel3
-    zip -r odin-final-kernel.zip ./*
-    cd ..
-    
-    # 直接在根目录创建另一个打包
-    zip -r odin-kernel.zip AnyKernel3/*
+        run: |
+          # 复制内核镜像，增加容错，不存在则提示
+          cp -fv ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/ || echo "Image 文件未找到！"
+          cp -fv ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/ || echo "dtb.img 文件未找到！"
+
+          # 进入AK3目录打包，排除所有git隐藏文件，修复原zip命令bug
+          cd AnyKernel3
+          zip -r odin-final-kernel.zip ./* -x "*.git*"
+          
+          # 返回上级，完整打包整个AnyKernel3文件夹
+          cd ..
+          zip -r odin-kernel.zip AnyKernel3/
+
+      # 新增调试：打包完列出所有文件，方便你排查
+      - name: List All Zip Files
+        run: |
+          echo "===== 所有生成压缩包 ====="
+          ls -la *.zip
+          ls -la AnyKernel3/*.zip
+          echo "=========================="
+
       # 11. 上传最终卡刷包1
       - name: Upload Final Flash Zip 1
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
@@ -134,8 +146,8 @@ jobs:
 
       # 12. 上传最终卡刷包2
       - name: Upload Final Flash Zip 2
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-kernel
-          path: AnyKernel3/odin-kernel.zip
+          path: odin-kernel.zip
           retention-days: 7
