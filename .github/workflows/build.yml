@@ -16,7 +16,11 @@ jobs:
       KERNEL_DEVICE: odin
       DEFCONFIG: odin_defconfig
 
-      WITH_KERNELSU: true
+      # 已关闭 KernelSU
+      WITH_KERNELSU: false
+      # 开启 SukiSU Ultra 集成
+      WITH_SUKISU: true
+
       USE_ANYKERNEL3: true
       ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
       ANYKERNEL_BRANCH: master
@@ -24,7 +28,7 @@ jobs:
       ARCH: arm64
 
     steps:
-      # 1. 全部依赖+系统原生LLVM Clang 全部apt安装，无任何外部下载
+      # 1. 安装全部编译依赖
       - name: Install All Build Dependencies
         run: |
           sudo apt-get update
@@ -36,36 +40,36 @@ jobs:
         run: |
           git clone --depth=1 --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
 
-      # 3. 克隆AnyKernel3打包框架
+      # 3. 克隆AnyKernel3
       - name: Clone AnyKernel3
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
-      # 4. 纯净集成KernelSU
-      - name: Integrate KernelSU
-        if: ${{ env.WITH_KERNELSU == true }}
+      # 4. 集成 SukiSU Ultra（官方标准脚本）
+      - name: Integrate SukiSU Ultra
+        if: ${{ env.WITH_SUKISU == true }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
+          # 清理旧残留 KernelSU 全部文件
           rm -rf KernelSU drivers/kernelsu
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          # SukiSU Ultra 官方一键拉取集成脚本
+          curl -LSs https://raw.githubusercontent.com/SuikuLab/SukiSU/main/kernel/setup.sh | bash
 
-      # 5. 生成原生默认配置
+      # 5. 生成设备配置
       - name: Generate Default Defconfig
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
 
-      # 6. 安卓16 / 安卓17 全兼容配置自动修复
+      # 6. 安卓16/17兼容配置修复
       - name: Android 16 17 Compatible Patch
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
-          # 关闭上游废弃配置
           sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' ${{ env.OUT_DIR }}/.config
 
-          # 开启高版本安卓强制兼容内核配置
           sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' ${{ env.OUT_DIR }}/.config
@@ -73,57 +77,65 @@ jobs:
 
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
 
-      # 7. 正式编译内核
+      # 7. 编译内核
       - name: Compile Kernel
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
 
-      # 8. 原生方式上传编译日志（无第三方Action）
+      # 调试：列出所有编译产物，看真实输出文件
+      - name: List All Kernel Output Files
+        run: |
+          echo "===== 内核编译输出全部文件 ====="
+          ls -la ${{ env.OUT_DIR }}/arch/arm64/boot/
+          echo "================================"
+
+      # 8. 上传编译日志
       - name: Upload Build Log
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
-      # 9. 上传内核镜像 Image.gz-dtb
-      - name: Upload Kernel Image
-        uses: actions/upload-artifact@v4
+      # 9. 上传全部内核镜像（小米Lahaina 骁龙8+真实输出）
+      - name: Upload Kernel Images
+        uses: actions/upload-artifact@v4.4.3
         with:
-          name: Image.gz-dtb-odin
-          path: ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb
+          name: Kernel-Images-odin
+          path: |
+            ${{ env.OUT_DIR }}/arch/arm64/boot/Image
+            ${{ env.OUT_DIR }}/arch/arm64/boot/Image.lz4
+            ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img
+            ${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz
           retention-days: 7
 
-      # 10. 打包AnyKernel3卡刷包
-      - name: Pack Flashable Zip
+      # 10. 标准AnyKernel3打包（odin专用正确写法）
+      - name: Pack AnyKernel3 Flashable Zip
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
-          cp -f ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb ./AnyKernel3/
+          # 小米Lahaina内核 复制真实内核镜像
+          cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/
+          cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/
+          
           cd AnyKernel3
-          zip -r odin-final-kernel.zip *
+          zip -r odin-final-kernel.zip ./*
+          
+          cd ..
+          zip -r odin-kernel.zip AnyKernel3/*
 
-      # 11. 上传最终刷机包
-      - name: Upload Final Flash Zip
-        uses: actions/upload-artifact@v4
+      # 11. 上传最终卡刷包1
+      - name: Upload Final Flash Zip 1
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
           retention-days: 7
 
-      # 修复：重复打包+错误action源 全部修正
-      - name: Pack AnyKernel3 Flashable Zip
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        run: |
-          cp -f ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb ./AnyKernel3/
-          cd AnyKernel3
-          zip -r ${{ env.KERNEL_DEVICE }}-kernel.zip *
-
-      - name: Upload AnyKernel3 Flashable Package
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        # 重点修复：把错误的 a596176616/upload-artifact 改回官方标准
-        uses: actions/upload-artifact@v4
+      # 12. 上传最终卡刷包2
+      - name: Upload Final Flash Zip 2
+        uses: actions/upload-artifact@v4.4.3
         with:
-          name: ${{ env.KERNEL_DEVICE }}-kernel
-          path: AnyKernel3/${{ env.KERNEL_DEVICE }}-kernel.zip
+          name: odin-kernel
+          path: odin-kernel.zip
           retention-days: 7
