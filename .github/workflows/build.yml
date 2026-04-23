@@ -1,226 +1,94 @@
-name: Build Xiaomi Odin Kernel Pure Final
+name: 小米MIX4(odin) Android14 内核编译
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
-  OUT_DIR: "${{ github.workspace }}/out"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  Build-Kernel:
-    # 保留你指定：个人仓库免费标准 4核 ubuntu-22.04 运行器
+  build-kernel:
     runs-on: ubuntu-22.04
-    env:
-      # 强制启用Node24，彻底消除Node.js20废弃警告
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-      WORKSPACE: ${{ github.workspace }}
-      KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
-      KERNEL_BRANCH: main
-      KERNEL_NAME: xiaomi_kernel_odin
-      KERNEL_DEVICE: odin
-      DEFCONFIG: odin_defconfig
-
-      WITH_KERNELSU: false
-      WITH_SUKISU: true
-
-      USE_ANYKERNEL3: true
-      ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
-      ANYKERNEL_BRANCH: master
-
-      ARCH: arm64
-
+    permissions:
+      contents: write
     steps:
-      # 1. 更换国内阿里云APT源 + 极速安装全部编译依赖
-      - name: Install All Build Dependencies
-        run: |
-          sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
-          sudo sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential bc curl git zip unzip \
-            libssl-dev libelf-dev flex bison zstd wget python3 \
-            clang llvm lld gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      # 2. 配置 sccache LLVM/clang 编译器缓存（内核编译核心加速）
-      - name: Setup sccache Compiler Cache
-        uses: mozilla-actions/sccache-action@v0.0.6
+      - name: 1. 拉取内核源码
+        uses: actions/checkout@v4
         with:
-          version: "v0.8.2"
+          fetch-depth: 1
 
-      # 3. 克隆内核源码（单分支浅克隆，速度最优）
-      - name: Clone Kernel Source
+      - name: 2. 安装编译依赖（包含完整 LLVM 工具链）
         run: |
-          git clone --depth=1 --single-branch --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev libncurses-dev \
+            zip curl wget python3 python3-pip cpio rsync git lz4 \
+            gzip unzip zstd libelf-dev dwarves kmod clang lld llvm
 
-      # 4. 克隆 AnyKernel3 卡刷打包工具
-      - name: Clone AnyKernel3
-        if: ${{ env.USE_ANYKERNEL3 == true }}
+      - name: 3. 编译内核
         run: |
-          git clone --depth=1 --single-branch --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          # ⚠️ 请确认仓库中存在 odin_defconfig，否则替换为实际存在的文件名
+          make O=out odin_defconfig
+          make O=out -j$(nproc)
+          echo "===== 编译产物列表 ====="
+          ls -la ./out/arch/arm64/boot/
+          ls -la ./out/
 
-      # ==============================================================
-      # 【你审计确认的完美缓存位置】
-      # 源码克隆完成后执行 → hashFiles 正常解析文件、哈希不为空
-      # SukiSU 执行之前 → 缓存不会覆盖后续内核修改
-      # 仅缓存 out 产物 + sccache，不缓存源码，无覆盖污染
-      # Key 携带 SukiSU 开关状态，配置变更自动刷新缓存
-      # ==============================================================
-      - name: Cache Build Artifacts & sccache
-        # ========== 【核心修正】actions/cache 官方最新稳定正版版本 v4.2.4 ==========
-        uses: actions/cache@v4.2.4
+      - name: 4. 拉取 AnyKernel3 打包
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ./AnyKernel3
+          
+          # 复制内核镜像（根据实际产物选择 Image 或 Image.gz）
+          if [ -f ./out/arch/arm64/boot/Image.gz ]; then
+            cp ./out/arch/arm64/boot/Image.gz ./AnyKernel3/
+          else
+            cp ./out/arch/arm64/boot/Image ./AnyKernel3/
+          fi
+
+          # 复制 dtbo（如果存在）
+          [ -f ./out/arch/arm64/boot/dtbo.img ] && cp ./out/arch/arm64/boot/dtbo.img ./AnyKernel3/ || echo "无 dtbo.img，跳过"
+
+          # 递归复制所有设备树文件
+          find ./out/arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} ./AnyKernel3/dtb/ \;
+
+          # 创建 MIX4 专属刷入脚本（使用 printf 避免 heredoc 语法冲突）
+          printf '%s\n' \
+            'do.devicecheck=1' \
+            'do.modules=1' \
+            'do.systemless=1' \
+            'do.cleanup=1' \
+            'do.cleanuponabort=0' \
+            'device.name1=odin' \
+            'device.name2=MIX4' \
+            'device.name3=小米MIX4' \
+            'block=/dev/block/by-name/boot' \
+            'is_slot_device=1' \
+            'ramdisk_compression=auto' \
+            'patch_vbmeta_flag=auto' \
+            '. tools/ak3-core.sh' \
+            'split_boot' \
+            'dump_boot' \
+            'write_boot' \
+            > ./AnyKernel3/anykernel.sh
+
+          # 复制内核模块（.ko 文件）
+          mkdir -p ./AnyKernel3/modules/vendor/lib/modules/
+          find ./out/ -name "*.ko" -type f -exec cp {} ./AnyKernel3/modules/vendor/lib/modules/ \; 2>/dev/null || true
+
+          # 打包为卡刷 ZIP
+          cd ./AnyKernel3
+          zip -r9 ../MIX4-Android14-Test-Kernel-${{ github.sha }}.zip *
+          cd ../
+          echo "===== 卡刷包生成完成 ====="
+          ls -la *.zip
+
+      - name: 5. 上传编译制品
+        uses: actions/upload-artifact@v4
         with:
-          path: |
-            ${{ env.OUT_DIR }}
-            ~/.cache/sccache
-          # 动态完整缓存密钥
-          key: ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-${{ hashFiles('xiaomi_kernel_odin/Makefile', 'xiaomi_kernel_odin/arch/arm64/configs/odin_defconfig') }}
-          restore-keys: |
-            ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-
-            ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-
-            ${{ runner.os }}-odin-
-
-      # 5. 集成 SukiSU Ultra（时序正确：配置生成之前执行，补丁全生效）
-      - name: Integrate SukiSU Ultra
-        if: ${{ env.WITH_SUKISU == true }}
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          rm -rf KernelSU drivers/kernelsu || true
-          curl -LSs https://raw.githubusercontent.com/SuikuLab/SukiSU/main/kernel/setup.sh | bash
-
-      # 6. 生成设备默认配置
-      - name: Generate Default Defconfig
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
-
-      # 7. 安卓 16/17 内核配置兼容修复
-      - name: Android 16 17 Compatible Patch
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          CONFIG_FILE=${{ env.OUT_DIR }}/.config
-          
-          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' "$CONFIG_FILE"
-          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' "$CONFIG_FILE"
-          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' "$CONFIG_FILE"
-          
-          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' "$CONFIG_FILE"
-          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' "$CONFIG_FILE"
-          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' "$CONFIG_FILE"
-          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' "$CONFIG_FILE"
-          
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
-
-      # 8. 内核编译（全套sccache加速环境变量 + 最优编译参数）
-      - name: Compile Kernel
-        working-directory: ${{ env.KERNEL_NAME }}
-        env:
-          CCACHE: sccache
-          SCCACHE_GHA_ENABLED: true
-          SCCACHE_NO_DAEMON: true
-        run: |
-          set -e
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
-            -j$(($(nproc)+1)) \
-            CONFIG_DEBUG_INFO=n \
-            2>&1 | tee build.log
-
-      # 9. 校验内核核心产物是否编译成功
-      - name: Verify Kernel Build Success
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        run: |
-          echo "🔍 检查内核编译产物..."
-          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] && echo "✅ Image found" || { echo "❌ Image not found"; exit 1; }
-          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] && echo "✅ dtb.img found" || { echo "❌ dtb.img not found"; exit 1; }
-          echo "✅ 所有编译产物检查通过"
-
-      # 10. 打印内核输出文件（调试查看）
-      - name: List Kernel Output Files
-        if: always()
-        run: |
-          echo "===== 内核编译输出文件 ====="
-          ls -lah ${{ env.OUT_DIR }}/arch/arm64/boot/ 2>/dev/null || echo "输出目录不存在"
-          echo "================================"
-
-      # 11. 上传编译日志
-      - name: Upload Build Log
-        if: always()
-        # upload-artifact v4.6.0 官方真实存在版本，无需改动
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: BuildLog-odin
-          path: ${{ env.KERNEL_NAME }}/build.log
-          retention-days: 7
-
-      # 12. 上传原始内核镜像
-      - name: Upload Kernel Images
-        if: always()
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: Kernel-Images-odin
-          path: ${{ env.OUT_DIR }}/arch/arm64/boot/
-          retention-days: 7
-
-      # 13. AnyKernel3 极速打包卡刷包
-      - name: Pack AnyKernel3 Flashable Zip
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        run: |
-          set -e
-          echo "📦 打包 AnyKernel3 卡刷包..."
-          
-          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] || { echo "❌ Image 文件未找到！"; exit 1; }
-          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] || { echo "❌ dtb.img 文件未找到！"; exit 1; }
-          
-          cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/Image" AnyKernel3/ 
-          cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" AnyKernel3/
-          
-          cd AnyKernel3
-          zip -r -0 odin-final-kernel.zip ./* -x *.git* .gitignore || { echo "❌ 内部包打包失败！"; exit 1; }
-          cd ..
-          
-          zip -r -0 odin-kernel.zip AnyKernel3/ -x *.git* .gitignore || { echo "❌ 完整包打包失败！"; exit 1; }
-          
-          echo "✅ 双版本卡刷包全部打包完成"
-
-      # 14. 列出生成的全部zip刷机包
-      - name: List Generated Zip Files
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        run: |
-          echo "===== 所有生成的压缩包 ====="
-          ls -lah *.zip 2>/dev/null || echo "根目录无zip文件"
-          ls -lah AnyKernel3/*.zip 2>/dev/null || echo "AnyKernel3目录无zip文件"
-          echo "=========================="
-
-      # 15. 上传内部纯净卡刷包
-      - name: Upload Final Flash Zip 1
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: odin-final-kernel
-          path: AnyKernel3/odin-final-kernel.zip
-          retention-days: 7
-
-      # 16. 上传完整全包卡刷包
-      - name: Upload Final Flash Zip 2
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: odin-kernel
-          path: odin-kernel.zip
-          retention-days: 7
-
-      # 17. 生成 GitHub 步骤编译摘要面板
-      - name: Generate Build Summary
-        if: always()
-        run: |
-          {
-            echo "## 🔨 内核编译摘要"
-            echo ""
-            echo "| 项目 | 详情 |"
-            echo "|------|------|"
-            echo "| 内核名称 | ${{ env.KERNEL_NAME }} |"
-            echo "| 设备代号 | ${{ env.KERNEL_DEVICE }} |"
-            echo "| 架构 | ${{ env.ARCH }} |"
-            echo "| Root方案 | SukiSU Ultra |"
-            echo "| 打包工具 | AnyKernel3 |"
-            echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') |"
-          } >> $GITHUB_STEP_SUMMARY
+          name: MIX4-Android14-Test-Kernel
+          path: ./*.zip
+          retention-days: 30
