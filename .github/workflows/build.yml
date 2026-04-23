@@ -16,23 +16,24 @@ jobs:
           fetch-depth: 1
 
       - name: 2. 安装编译依赖（包含完整 LLVM 工具链）
-  run: |
-    sudo apt-get update
-    sudo apt-get install -y \
-      build-essential bc bison flex libssl-dev libncurses-dev \
-      zip curl wget python3 python3-pip cpio rsync git lz4 \
-      gzip unzip zstd libelf-dev dwarves kmod clang lld llvm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev libncurses-dev \
+            zip curl wget python3 python3-pip cpio rsync git lz4 \
+            gzip unzip zstd libelf-dev dwarves kmod clang lld llvm
 
       - name: 3. 编译内核
-  run: |
-    export ARCH=arm64
-    export LLVM=1
-    export LLVM_IAS=1
-    make O=out odin_defconfig
-    make O=out -j$(nproc)
-    echo "===== 编译产物列表 ====="
-    ls -la ./out/arch/arm64/boot/
-    ls -la ./out/
+        run: |
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          # ⚠️ 请确认仓库中存在 odin_defconfig，否则替换为实际存在的文件名
+          make O=out odin_defconfig
+          make O=out -j$(nproc)
+          echo "===== 编译产物列表 ====="
+          ls -la ./out/arch/arm64/boot/
+          ls -la ./out/
 
       - name: 4. 拉取 AnyKernel3 打包
         run: |
@@ -51,7 +52,7 @@ jobs:
           # 递归复制所有设备树文件
           find ./out/arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} ./AnyKernel3/dtb/ \;
 
-          # 创建 MIX4 专属刷入脚本（改用 printf 避免 heredoc 语法冲突）
+          # 创建 MIX4 专属刷入脚本（使用 printf 避免 heredoc 语法冲突）
           printf '%s\n' \
             'do.devicecheck=1' \
             'do.modules=1' \
