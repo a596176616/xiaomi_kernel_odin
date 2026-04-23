@@ -110,6 +110,8 @@ jobs:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
           retention-days: 7
+
+      # 修复：重复打包+错误action源 全部修正
       - name: Pack AnyKernel3 Flashable Zip
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
@@ -119,9 +121,9 @@ jobs:
 
       - name: Upload AnyKernel3 Flashable Package
         if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: a596176616/upload-artifact@v4
+        # 重点修复：把错误的 a596176616/upload-artifact 改回官方标准
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.KERNEL_DEVICE }}-kernel
           path: AnyKernel3/${{ env.KERNEL_DEVICE }}-kernel.zip
           retention-days: 7
-
