@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3
 
       - name: Setup AOSP Clang Toolchain
-        uses: dtcooper/action-aosp-clang@v1
+        uses: a596176616/action-aosp-clang@v1
         with:
           clang-version: ${{ env.CLANG_VERSION }}
 
@@ -94,14 +94,14 @@ jobs:
           echo "Kernel build completed"
 
       - name: Upload Build Log
-        uses: actions/upload-artifact@v4
+        uses: a596176616/upload-artifact@v4
         with:
           name: BuildLog-${{ env.KERNEL_DEVICE }}-${{ env.KERNEL_NAME }}
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
       - name: Upload Kernel Image.gz-dtb
-        uses: actions/upload-artifact@v4
+        uses: a596176616/upload-artifact@v4
         with:
           name: Image.gz-dtb-${{ env.KERNEL_DEVICE }}
           path: ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb
@@ -116,7 +116,7 @@ jobs:
 
       - name: Upload AnyKernel3 Flashable Package
         if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: actions/upload-artifact@v4
+        uses: a596176616/upload-artifact@v4
         with:
           name: ${{ env.KERNEL_DEVICE }}-kernel
           path: AnyKernel3/${{ env.KERNEL_DEVICE }}-kernel.zip
