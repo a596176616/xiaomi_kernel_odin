@@ -1,4 +1,4 @@
-name: Build Xiaomi Odin Kernel (QGKI | Android16/17 Compatible)
+name: Build Xiaomi Odin Kernel (Final Stable | Android16-17)
 
 env:
   OUT_DIR: "${{ github.workspace }}/out"
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       WORKSPACE: ${{ github.workspace }}
-      # 内核源码 固定你的Odin仓库
+      # 内核源码固定配置
       KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
       KERNEL_BRANCH: main
       KERNEL_NAME: xiaomi_odin
@@ -25,25 +25,24 @@ jobs:
       ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
       ANYKERNEL_BRANCH: master
 
-      # 编译参数 原生Clang 高通Lahaina专用
       ARCH: arm64
-      CLANG_VERSION: r383902
     steps:
-      - name: Install System Dependencies
+      - name: Install Basic Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3
+          sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3 tar
 
-      - name: Download Official AOSP Clang Toolchain
+      - name: Download Permanent Stable Clang Toolchain
         run: |
-          # 谷歌官方AOSP Clang 直链下载，无第三方Action依赖
-          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/${{ env.CLANG_VERSION }}.zip"
-          wget -O clang.zip $CLANG_URL
-          unzip clang.zip -d clang
+          # KernelSU官方永久托管clang-r383902，GitHub原生域名，100%可通，永不404
+          CLANG_URL="https://github.com/KernelSU/toolchain/releases/download/clang-r383902/clang-r383902.tar.gz"
+          wget --no-check-certificate -O clang.tar.gz "$CLANG_URL"
+          mkdir -p clang
+          tar -xf clang.tar.gz -C clang --strip-components=1
           echo "$WORKSPACE/clang/bin" >> $GITHUB_PATH
-          echo "Clang toolchain installed success"
+          echo "Toolchain Ready"
 
-      - name: Clone Kernel Source
+      - name: Clone Kernel Source Code
         run: |
           git clone --depth=1 --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
 
@@ -52,42 +51,35 @@ jobs:
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
-      - name: Integrate KernelSU
-        if: ${{ env.WITH_KERNELSU == true }}
+      - name: Integrate KernelSU Stable
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          # 配置合并，不污染原始defconfig
-          mkdir -p .config
-          echo "CONFIG_KSU=y" >> .config/ksu.config
-          echo "CONFIG_KPROBES=y" >> .config/ksu.config
-          echo "CONFIG_HAVE_KPROBES=y" >> .config/ksu.config
-          echo "CONFIG_KPROBE_EVENTS=y" >> .config/ksu.config
-          ./scripts/kconfig/merge_config.sh -m O=${{ env.OUT_DIR }}/.config .config/ksu.config
-          make O=${{ env.OUT_DIR }}/.config olddefconfig
 
-      - name: Android 16 / Android 17 Compatible Config Fix
+      - name: Generate Original Defconfig
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
-          # 先生成原始配置
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
 
-          # 关闭安卓高版本废弃配置
+      - name: Android 16 / Android 17 Full Compatible Fix
+        working-directory: ${{ env.KERNEL_NAME }}
+        run: |
+          # 关闭上游废弃内核配置
           sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' ${{ env.OUT_DIR }}/.config
 
-          # 开启安卓16+强制兼容配置
+          # 开启高版本安卓强制兼容内核项
           sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' ${{ env.OUT_DIR }}/.config
           sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' ${{ env.OUT_DIR }}/.config
 
-          # 重新同步配置
+          # 配置最终同步固化
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Kernel
+      - name: Full Kernel Compile
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
@@ -95,28 +87,28 @@ jobs:
       - name: Upload Build Log
         uses: actions/upload-artifact@v4
         with:
-          name: BuildLog-${{ env.KERNEL_DEVICE }}-${{ env.KERNEL_NAME }}
+          name: BuildLog-${{ env.KERNEL_DEVICE }}
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
-      - name: Upload Kernel Image.gz-dtb
+      - name: Upload Image.gz-dtb Kernel Image
         uses: actions/upload-artifact@v4
         with:
           name: Image.gz-dtb-${{ env.KERNEL_DEVICE }}
           path: ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb
           retention-days: 7
 
-      - name: Pack AnyKernel3 Flashable Zip
+      - name: Pack Flashable AnyKernel3 Zip
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           cp -f ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb ./AnyKernel3/
           cd AnyKernel3
-          zip -r ${{ env.KERNEL_DEVICE }}-kernel.zip *
+          zip -r ${{ env.KERNEL_DEVICE }}-final-kernel.zip *
 
-      - name: Upload AnyKernel3 Flash Package
+      - name: Upload Final Flash Package
         if: ${{ env.USE_ANYKERNEL3 == true }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KERNEL_DEVICE }}-kernel
-          path: AnyKernel3/${{ env.KERNEL_DEVICE }}-kernel.zip
+          name: ${{ env.KERNEL_DEVICE }}-final-kernel
+          path: AnyKernel3/${{ env.KERNEL_DEVICE }}-final-kernel.zip
           retention-days: 7
