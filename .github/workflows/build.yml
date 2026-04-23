@@ -34,9 +34,11 @@ jobs:
       # 1. 安装全部编译依赖
       - name: Install All Build Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3 \
-          clang llvm lld gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc curl git zip unzip \
+            libssl-dev libelf-dev flex bison zstd wget python3 \
+            clang llvm lld gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       # 2. 克隆内核源码
       - name: Clone Kernel Source
@@ -45,13 +47,13 @@ jobs:
 
       # 3. 克隆AnyKernel3
       - name: Clone AnyKernel3
-        if: ${{ env.USE_ANYKERNEL3 == true }}
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
       # 4. 集成 SukiSU Ultra（官方标准脚本）
       - name: Integrate SukiSU Ultra
-        if: ${{ env.WITH_SUKISU == true }}
+        if: ${{ env.WITH_SUKISU == 'true' }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           # 清理旧残留 KernelSU 全部文件
@@ -69,85 +71,127 @@ jobs:
       - name: Android 16 17 Compatible Patch
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
-          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' ${{ env.OUT_DIR }}/.config
-          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' ${{ env.OUT_DIR }}/.config
-          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' ${{ env.OUT_DIR }}/.config
-
-          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' ${{ env.OUT_DIR }}/.config
-          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' ${{ env.OUT_DIR }}/.config
-          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' ${{ env.OUT_DIR }}/.config
-          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' ${{ env.OUT_DIR }}/.config
-
+          CONFIG_FILE=${{ env.OUT_DIR }}/.config
+          
+          # 禁用的选项
+          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' "$CONFIG_FILE"
+          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' "$CONFIG_FILE"
+          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' "$CONFIG_FILE"
+          
+          # 启用的选项
+          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' "$CONFIG_FILE"
+          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' "$CONFIG_FILE"
+          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' "$CONFIG_FILE"
+          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' "$CONFIG_FILE"
+          
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
 
       # 7. 编译内核
       - name: Compile Kernel
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
+          set -e
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
 
-      # 调试：列出所有编译产物，看真实输出文件
-      - name: List All Kernel Output Files
+      # 8. 验证编译产物
+      - name: Verify Kernel Build Success
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
         run: |
-          echo "===== 内核编译输出全部文件 ====="
-          ls -la ${{ env.OUT_DIR }}/arch/arm64/boot/
+          echo "🔍 检查内核编译产物..."
+          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] && echo "✅ Image found" || { echo "❌ Image not found"; exit 1; }
+          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] && echo "✅ dtb.img found" || { echo "❌ dtb.img not found"; exit 1; }
+          echo "✅ 所有编译产物检查通过"
+
+      # 9. 列出编译产物
+      - name: List Kernel Output Files
+        if: always()
+        run: |
+          echo "===== 内核编译输出文件 ====="
+          ls -lah ${{ env.OUT_DIR }}/arch/arm64/boot/ 2>/dev/null || echo "输出目录不存在"
           echo "================================"
 
-      # 8. 上传编译日志
+      # 10. 上传编译日志
       - name: Upload Build Log
-        uses: actions/upload-artifact@v4.6.0
+        if: always()
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
-      # 9. 上传全部内核镜像（小米Lahaina 骁龙8+真实输出）
+      # 11. 上传内核镜像
       - name: Upload Kernel Images
-        uses: actions/upload-artifact@v4.6.0
+        if: always()
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: Kernel-Images-odin
-          path: |
-            ${{ env.OUT_DIR }}/arch/arm64/boot/Image
-            ${{ env.OUT_DIR }}/arch/arm64/boot/Image.lz4
-            ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img
-            ${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz
+          path: ${{ env.OUT_DIR }}/arch/arm64/boot/
           retention-days: 7
 
-      # 10. 标准AnyKernel3打包（odin专用修复版，解决文件不生成问题）
+      # 12. 标准AnyKernel3打包
       - name: Pack AnyKernel3 Flashable Zip
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
         run: |
-          # 复制内核镜像，增加容错，不存在则提示
-          cp -fv ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/ || echo "Image 文件未找到！"
-          cp -fv ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/ || echo "dtb.img 文件未找到！"
-
-          # 进入AK3目录打包，排除所有git隐藏文件，修复原zip命令bug
-          cd AnyKernel3
-          zip -r odin-final-kernel.zip ./* -x "*.git*"
+          set -e
+          echo "📦 打包 AnyKernel3..."
           
-          # 返回上级，完整打包整个AnyKernel3文件夹
+          # 复制内核镜像，检查文件是否存在
+          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] || { echo "❌ Image 文件未找到！"; exit 1; }
+          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] || { echo "❌ dtb.img 文件未找到！"; exit 1; }
+          
+          cp -fv "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" AnyKernel3/ 
+          cp -fv "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" AnyKernel3/
+          
+          # 进入AK3目录打包
+          cd AnyKernel3
+          zip -r odin-final-kernel.zip ./* -x "*.git*" ".gitignore" ".github/*" || { echo "❌ 打包失败！"; exit 1; }
           cd ..
-          zip -r odin-kernel.zip AnyKernel3/
+          
+          # 在根目录打包完整的 AnyKernel3
+          zip -r odin-kernel.zip AnyKernel3/ -x "*.git*" "*.gitignore" ".github/*" || { echo "❌ 打包失败！"; exit 1; }
+          
+          echo "✅ 打包完成"
 
-      # 新增调试：打包完列出所有文件，方便你排查
-      - name: List All Zip Files
+      # 13. 列出生成的压缩包
+      - name: List Generated Zip Files
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
         run: |
-          echo "===== 所有生成压缩包 ====="
-          ls -la *.zip
-          ls -la AnyKernel3/*.zip
+          echo "===== 所有生成的压缩包 ====="
+          ls -lah *.zip 2>/dev/null || echo "根目录无zip文件"
+          ls -lah AnyKernel3/*.zip 2>/dev/null || echo "AnyKernel3目录无zip文件"
           echo "=========================="
 
-      # 11. 上传最终卡刷包1
+      # 14. 上传最终卡刷包1
       - name: Upload Final Flash Zip 1
-        uses: actions/upload-artifact@v4.6.0
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
           retention-days: 7
 
-      # 12. 上传最终卡刷包2
+      # 15. 上传最终卡刷包2
       - name: Upload Final Flash Zip 2
-        uses: actions/upload-artifact@v4.6.0
+        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: odin-kernel
           path: odin-kernel.zip
           retention-days: 7
+
+      # 16. 生成编译摘要
+      - name: Generate Build Summary
+        if: always()
+        run: |
+          {
+            echo "## 🔨 内核编译摘要"
+            echo ""
+            echo "| 项目 | 详情 |"
+            echo "|------|------|"
+            echo "| 内核名称 | ${{ env.KERNEL_NAME }} |"
+            echo "| 设备 | ${{ env.KERNEL_DEVICE }} |"
+            echo "| 架构 | ${{ env.ARCH }} |"
+            echo "| SukiSU | ${{ env.WITH_SUKISU }} |"
+            echo "| AnyKernel3 | ${{ env.USE_ANYKERNEL3 }} |"
+            echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') |"
+          } >> $GITHUB_STEP_SUMMARY
