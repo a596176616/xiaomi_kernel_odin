@@ -112,18 +112,18 @@ jobs:
 
       # 10. 标准AnyKernel3打包（odin专用正确写法）
       - name: Pack AnyKernel3 Flashable Zip
-        if: ${{ env.USE_ANYKERNEL3 == true }}
-        run: |
-          # 小米Lahaina内核 复制真实内核镜像
-          cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/
-          cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/
-          
-          cd AnyKernel3
-          zip -r odin-final-kernel.zip ./*
-          
-          cd ..
-          zip -r odin-kernel.zip AnyKernel3/*
-
+  if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+  run: |
+    # 小米Lahaina内核 复制真实内核镜像
+    cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image AnyKernel3/
+    cp -f ${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img AnyKernel3/
+    
+    cd AnyKernel3
+    zip -r odin-final-kernel.zip ./*
+    cd ..
+    
+    # 直接在根目录创建另一个打包
+    zip -r odin-kernel.zip AnyKernel3/*
       # 11. 上传最终卡刷包1
       - name: Upload Final Flash Zip 1
         uses: actions/upload-artifact@v4.4.3
