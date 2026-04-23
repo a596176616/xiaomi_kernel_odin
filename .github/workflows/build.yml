@@ -7,6 +7,7 @@ env:
 
 jobs:
   Build-Kernel:
+    # 保留你指定：个人仓库免费标准 4核 ubuntu-22.04 运行器
     runs-on: ubuntu-22.04
     env:
       # 强制启用Node24，彻底消除Node.js20废弃警告
@@ -15,13 +16,11 @@ jobs:
       WORKSPACE: ${{ github.workspace }}
       KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
       KERNEL_BRANCH: main
-      KERNEL_NAME: xiaomi_odin
+      KERNEL_NAME: xiaomi_kernel_odin
       KERNEL_DEVICE: odin
       DEFCONFIG: odin_defconfig
 
-      # 已关闭 KernelSU
       WITH_KERNELSU: false
-      # 开启 SukiSU Ultra 集成
       WITH_SUKISU: true
 
       USE_ANYKERNEL3: true
@@ -31,54 +30,78 @@ jobs:
       ARCH: arm64
 
     steps:
-      # 1. 安装全部编译依赖
+      # 1. 更换国内阿里云APT源 + 极速安装全部编译依赖
       - name: Install All Build Dependencies
         run: |
+          sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+          sudo sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             build-essential bc curl git zip unzip \
             libssl-dev libelf-dev flex bison zstd wget python3 \
             clang llvm lld gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      # 2. 克隆内核源码
+      # 2. 配置 sccache LLVM/clang 编译器缓存（内核编译核心加速）
+      - name: Setup sccache Compiler Cache
+        uses: mozilla-actions/sccache-action@v0.0.6
+        with:
+          version: "v0.8.2"
+
+      # 3. 克隆内核源码（单分支浅克隆，速度最优）
       - name: Clone Kernel Source
         run: |
-          git clone --depth=1 --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
+          git clone --depth=1 --single-branch --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
 
-      # 3. 克隆AnyKernel3
+      # 4. 克隆 AnyKernel3 卡刷打包工具
       - name: Clone AnyKernel3
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
-          git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
+          git clone --depth=1 --single-branch --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
-      # 4. 集成 SukiSU Ultra（官方标准脚本）
+      # ==============================================================
+      # 【核心修正：缓存步骤移至此位置】
+      # 1. 源码已克隆完成 → hashFiles 可正常读取文件生成哈希，不再为空
+      # 2. 位于 SukiSU 之前 → 缓存恢复不会覆盖后续内核源码修改
+      # 3. 缓存仅存 out 产物 + sccache，**不缓存源码目录**，无覆盖污染
+      # 4. Key 新增 WITH_SUKISU 状态，Root方案改动自动刷新缓存
+      # ==============================================================
+      - name: Cache Build Artifacts & sccache
+        uses: actions/cache@v4.6.0
+        with:
+          path: |
+            ${{ env.OUT_DIR }}
+            ~/.cache/sccache
+          # 动态哈希：系统-分支-SukiSU状态-Makefile-设备defconfig
+          key: ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-${{ hashFiles('xiaomi_kernel_odin/Makefile', 'xiaomi_kernel_odin/arch/arm64/configs/odin_defconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-
+            ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-
+            ${{ runner.os }}-odin-
+
+      # 5. 集成 SukiSU Ultra（时序正确：配置生成之前执行，补丁全生效）
       - name: Integrate SukiSU Ultra
         if: ${{ env.WITH_SUKISU == true }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
-          # 清理旧残留 KernelSU 全部文件
-          rm -rf KernelSU drivers/kernelsu
-          # SukiSU Ultra 官方一键拉取集成脚本
+          rm -rf KernelSU drivers/kernelsu || true
           curl -LSs https://raw.githubusercontent.com/SuikuLab/SukiSU/main/kernel/setup.sh | bash
 
-      # 5. 生成设备配置
+      # 6. 生成设备默认配置
       - name: Generate Default Defconfig
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
 
-      # 6. 安卓16/17兼容配置修复
+      # 7. 安卓 16/17 内核配置兼容修复
       - name: Android 16 17 Compatible Patch
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           CONFIG_FILE=${{ env.OUT_DIR }}/.config
           
-          # 禁用的选项
           sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' "$CONFIG_FILE"
           sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' "$CONFIG_FILE"
           sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' "$CONFIG_FILE"
           
-          # 启用的选项
           sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' "$CONFIG_FILE"
           sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' "$CONFIG_FILE"
           sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' "$CONFIG_FILE"
@@ -86,14 +109,21 @@ jobs:
           
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
 
-      # 7. 编译内核
+      # 8. 内核编译（全套sccache加速环境变量 + 最优编译参数）
       - name: Compile Kernel
         working-directory: ${{ env.KERNEL_NAME }}
+        env:
+          CCACHE: sccache
+          SCCACHE_GHA_ENABLED: true
+          SCCACHE_NO_DAEMON: true
         run: |
           set -e
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
+            -j$(($(nproc)+1)) \
+            CONFIG_DEBUG_INFO=n \
+            2>&1 | tee build.log
 
-      # 8. 验证编译产物
+      # 9. 校验内核核心产物是否编译成功
       - name: Verify Kernel Build Success
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
@@ -102,7 +132,7 @@ jobs:
           [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] && echo "✅ dtb.img found" || { echo "❌ dtb.img not found"; exit 1; }
           echo "✅ 所有编译产物检查通过"
 
-      # 9. 列出编译产物
+      # 10. 打印内核输出文件（调试查看）
       - name: List Kernel Output Files
         if: always()
         run: |
@@ -110,7 +140,7 @@ jobs:
           ls -lah ${{ env.OUT_DIR }}/arch/arm64/boot/ 2>/dev/null || echo "输出目录不存在"
           echo "================================"
 
-      # 10. 上传编译日志
+      # 11. 上传编译日志
       - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4.6.0
@@ -119,7 +149,7 @@ jobs:
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
-      # 11. 上传内核镜像
+      # 12. 上传原始内核镜像
       - name: Upload Kernel Images
         if: always()
         uses: actions/upload-artifact@v4.6.0
@@ -128,31 +158,28 @@ jobs:
           path: ${{ env.OUT_DIR }}/arch/arm64/boot/
           retention-days: 7
 
-      # 12. 标准AnyKernel3打包
+      # 13. AnyKernel3 极速打包卡刷包
       - name: Pack AnyKernel3 Flashable Zip
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           set -e
-          echo "📦 打包 AnyKernel3..."
+          echo "📦 打包 AnyKernel3 卡刷包..."
           
-          # 复制内核镜像，检查文件是否存在
           [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] || { echo "❌ Image 文件未找到！"; exit 1; }
           [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] || { echo "❌ dtb.img 文件未找到！"; exit 1; }
           
           cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/Image" AnyKernel3/ 
           cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" AnyKernel3/
           
-          # 进入AK3目录打包，修复排除参数错误
           cd AnyKernel3
-          zip -r odin-final-kernel.zip ./* -x "*.git*" .gitignore || { echo "❌ 打包失败！"; exit 1; }
+          zip -r -0 odin-final-kernel.zip ./* -x *.git* .gitignore || { echo "❌ 内部包打包失败！"; exit 1; }
           cd ..
           
-          # 根目录完整打包AnyKernel3
-          zip -r odin-kernel.zip AnyKernel3/ -x "*.git*" .gitignore || { echo "❌ 打包失败！"; exit 1; }
+          zip -r -0 odin-kernel.zip AnyKernel3/ -x *.git* .gitignore || { echo "❌ 完整包打包失败！"; exit 1; }
           
-          echo "✅ 打包完成"
+          echo "✅ 双版本卡刷包全部打包完成"
 
-      # 13. 列出生成的压缩包
+      # 14. 列出生成的全部zip刷机包
       - name: List Generated Zip Files
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
@@ -161,7 +188,7 @@ jobs:
           ls -lah AnyKernel3/*.zip 2>/dev/null || echo "AnyKernel3目录无zip文件"
           echo "=========================="
 
-      # 14. 上传最终卡刷包1
+      # 15. 上传内部纯净卡刷包
       - name: Upload Final Flash Zip 1
         if: ${{ env.USE_ANYKERNEL3 == true }}
         uses: actions/upload-artifact@v4.6.0
@@ -170,7 +197,7 @@ jobs:
           path: AnyKernel3/odin-final-kernel.zip
           retention-days: 7
 
-      # 15. 上传最终卡刷包2
+      # 16. 上传完整全包卡刷包
       - name: Upload Final Flash Zip 2
         if: ${{ env.USE_ANYKERNEL3 == true }}
         uses: actions/upload-artifact@v4.6.0
@@ -179,7 +206,7 @@ jobs:
           path: odin-kernel.zip
           retention-days: 7
 
-      # 16. 生成编译摘要
+      # 17. 生成 GitHub 步骤编译摘要面板
       - name: Generate Build Summary
         if: always()
         run: |
@@ -189,9 +216,9 @@ jobs:
             echo "| 项目 | 详情 |"
             echo "|------|------|"
             echo "| 内核名称 | ${{ env.KERNEL_NAME }} |"
-            echo "| 设备 | ${{ env.KERNEL_DEVICE }} |"
+            echo "| 设备代号 | ${{ env.KERNEL_DEVICE }} |"
             echo "| 架构 | ${{ env.ARCH }} |"
-            echo "| SukiSU | ${{ env.WITH_SUKISU }} |"
-            echo "| AnyKernel3 | ${{ env.USE_ANYKERNEL3 }} |"
+            echo "| Root方案 | SukiSU Ultra |"
+            echo "| 打包工具 | AnyKernel3 |"
             echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') |"
           } >> $GITHUB_STEP_SUMMARY
