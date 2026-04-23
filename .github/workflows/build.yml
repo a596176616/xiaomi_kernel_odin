@@ -4,7 +4,7 @@ env:
   OUT_DIR: "${{ github.workspace }}/out"
 
 on:
-  workflow_dispatch: # 手动点击运行
+  workflow_dispatch:
 
 jobs:
   Build-Kernel:
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       WORKSPACE: ${{ github.workspace }}
-      # 内核源码信息 完全适配你这个仓库
+      # 内核源码 固定你的Odin仓库
       KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
       KERNEL_BRANCH: main
       KERNEL_NAME: xiaomi_odin
@@ -25,9 +25,8 @@ jobs:
       ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
       ANYKERNEL_BRANCH: master
 
-      # 编译环境 高通Lahaina 官方Clang参数 适配安卓16/17
+      # 编译参数 原生Clang 高通Lahaina专用
       ARCH: arm64
-      CLANG_NAME: aosp-clang
       CLANG_VERSION: r383902
     steps:
       - name: Install System Dependencies
@@ -35,29 +34,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3
 
-      - name: Setup AOSP Clang Toolchain
-        uses: dtcooper/action-aosp-clang@v1
-        with:
-          clang-version: ${{ env.CLANG_VERSION }}
+      - name: Download Official AOSP Clang Toolchain
+        run: |
+          # 谷歌官方AOSP Clang 直链下载，无第三方Action依赖
+          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/${{ env.CLANG_VERSION }}.zip"
+          wget -O clang.zip $CLANG_URL
+          unzip clang.zip -d clang
+          echo "$WORKSPACE/clang/bin" >> $GITHUB_PATH
+          echo "Clang toolchain installed success"
 
       - name: Clone Kernel Source
         run: |
           git clone --depth=1 --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
-          echo "Kernel source cloned: ${{ env.KERNEL_REPO }}"
 
       - name: Setup AnyKernel3
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
-          echo "AnyKernel3 setup done"
 
-      - name: Auto Integrate KernelSU
+      - name: Integrate KernelSU
         if: ${{ env.WITH_KERNELSU == true }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          # 官方配置合并，不修改原始defconfig，兼容高版本内核
+          # 配置合并，不污染原始defconfig
           mkdir -p .config
           echo "CONFIG_KSU=y" >> .config/ksu.config
           echo "CONFIG_KPROBES=y" >> .config/ksu.config
@@ -66,32 +67,30 @@ jobs:
           ./scripts/kconfig/merge_config.sh -m O=${{ env.OUT_DIR }}/.config .config/ksu.config
           make O=${{ env.OUT_DIR }}/.config olddefconfig
 
-      - name: Apply Android 16 / Android 17 Compatible Patches
+      - name: Android 16 / Android 17 Compatible Config Fix
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
-          # 关闭上游安卓高版本废弃内核配置
-          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' .config
-          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' .config
-          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' .config
+          # 先生成原始配置
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
+
+          # 关闭安卓高版本废弃配置
+          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' ${{ env.OUT_DIR }}/.config
 
           # 开启安卓16+强制兼容配置
-          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' .config
-          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' .config
-          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' .config
-          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' .config
+          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' ${{ env.OUT_DIR }}/.config
 
-          echo "Android 16/17 compatible config applied"
-
-      - name: Generate Defconfig
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
+          # 重新同步配置
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
 
       - name: Build Kernel
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
-          echo "Kernel build completed"
 
       - name: Upload Build Log
         uses: actions/upload-artifact@v4
@@ -114,7 +113,7 @@ jobs:
           cd AnyKernel3
           zip -r ${{ env.KERNEL_DEVICE }}-kernel.zip *
 
-      - name: Upload AnyKernel3 Flashable Package
+      - name: Upload AnyKernel3 Flash Package
         if: ${{ env.USE_ANYKERNEL3 == true }}
         uses: actions/upload-artifact@v4
         with:
