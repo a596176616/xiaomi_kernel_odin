@@ -14,7 +14,7 @@ jobs:
       KERNEL_BRANCH: main
       KERNEL_NAME: xiaomi_odin
       KERNEL_DEVICE: odin
-      DEFCONFIG: lahaina_odin_defconfig
+      DEFCONFIG: odin_defconfig
 
       WITH_KERNELSU: true
       USE_ANYKERNEL3: true
