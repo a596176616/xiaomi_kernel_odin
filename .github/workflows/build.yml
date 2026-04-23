@@ -1,112 +1,115 @@
-name: Build Xiaomi Odin Kernel (QGKI | Android16/17 Compatible)
+name: Build Xiaomi Odin Kernel Pure Final
+on:
+  workflow_dispatch:
 
 env:
   OUT_DIR: "${{ github.workspace }}/out"
 
-on:
-  workflow_dispatch: # 手动点击运行
-
 jobs:
   Build-Kernel:
-    name: Build Odin Kernel
     runs-on: ubuntu-22.04
     env:
       WORKSPACE: ${{ github.workspace }}
-      # 内核源码信息 完全适配你这个仓库
       KERNEL_REPO: https://github.com/a596176616/xiaomi_kernel_odin.git
       KERNEL_BRANCH: main
       KERNEL_NAME: xiaomi_odin
       KERNEL_DEVICE: odin
       DEFCONFIG: lahaina_odin_defconfig
 
-      # 功能开关
       WITH_KERNELSU: true
       USE_ANYKERNEL3: true
       ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
       ANYKERNEL_BRANCH: master
 
-      # 编译环境 高通Lahaina 官方Clang参数 适配安卓16/17
       ARCH: arm64
-      CLANG_NAME: aosp-clang
-      CLANG_VERSION: r383902
+
     steps:
-      - name: Install System Dependencies
+      # 1. 全部依赖+系统原生LLVM Clang 全部apt安装，无任何外部下载
+      - name: Install All Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3
+          sudo apt-get install -y build-essential bc curl git zip unzip libssl-dev libelf-dev flex bison zstd wget python3 \
+          clang llvm lld gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - name: Setup AOSP Clang Toolchain
-        uses: a596176616/action-aosp-clang@v1
-        with:
-          clang-version: ${{ env.CLANG_VERSION }}
-
+      # 2. 克隆内核源码
       - name: Clone Kernel Source
         run: |
           git clone --depth=1 --shallow-submodules -j$(nproc) --branch ${{ env.KERNEL_BRANCH }} ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }}
-          echo "Kernel source cloned: ${{ env.KERNEL_REPO }}"
 
-      - name: Setup AnyKernel3
+      # 3. 克隆AnyKernel3打包框架
+      - name: Clone AnyKernel3
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
-          echo "AnyKernel3 setup done"
 
-      - name: Auto Integrate KernelSU
+      # 4. 纯净集成KernelSU
+      - name: Integrate KernelSU
         if: ${{ env.WITH_KERNELSU == true }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          # 官方配置合并，不修改原始defconfig，兼容高版本内核
-          mkdir -p .config
-          echo "CONFIG_KSU=y" >> .config/ksu.config
-          echo "CONFIG_KPROBES=y" >> .config/ksu.config
-          echo "CONFIG_HAVE_KPROBES=y" >> .config/ksu.config
-          echo "CONFIG_KPROBE_EVENTS=y" >> .config/ksu.config
-          ./scripts/kconfig/merge_config.sh -m O=${{ env.OUT_DIR }}/.config .config/ksu.config
-          make O=${{ env.OUT_DIR }}/.config olddefconfig
 
-      - name: Apply Android 16 / Android 17 Compatible Patches
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          # 关闭上游安卓高版本废弃内核配置
-          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' .config
-          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' .config
-          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' .config
-
-          # 开启安卓16+强制兼容配置
-          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' .config
-          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' .config
-          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' .config
-          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' .config
-
-          echo "Android 16/17 compatible config applied"
-
-      - name: Generate Defconfig
+      # 5. 生成原生默认配置
+      - name: Generate Default Defconfig
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 ${{ env.DEFCONFIG }}
 
-      - name: Build Kernel
+      # 6. 安卓16 / 安卓17 全兼容配置自动修复
+      - name: Android 16 17 Compatible Patch
+        working-directory: ${{ env.KERNEL_NAME }}
+        run: |
+          # 关闭上游废弃配置
+          sed -i 's/^# CONFIG_RSEQ is not set/CONFIG_RSEQ=n/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^CONFIG_DMI=y/# CONFIG_DMI is not set/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^CONFIG_FHANDLE=y/# CONFIG_FHANDLE is not set/' ${{ env.OUT_DIR }}/.config
+
+          # 开启高版本安卓强制兼容内核配置
+          sed -i 's/^# CONFIG_ANDROID_BINDERFS is not set/CONFIG_ANDROID_BINDERFS=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set/CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_RCU_TASKS is not set/CONFIG_RCU_TASKS=y/' ${{ env.OUT_DIR }}/.config
+          sed -i 's/^# CONFIG_MEMCG_SWAP is not set/CONFIG_MEMCG_SWAP=y/' ${{ env.OUT_DIR }}/.config
+
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 olddefconfig
+
+      # 7. 正式编译内核
+      - name: Compile Kernel
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
-          echo "Kernel build completed"
 
+      # 8. 原生方式上传编译日志（无第三方Action）
       - name: Upload Build Log
-        uses: a596176616/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
-          name: BuildLog-${{ env.KERNEL_DEVICE }}-${{ env.KERNEL_NAME }}
+          name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
           retention-days: 7
 
-      - name: Upload Kernel Image.gz-dtb
-        uses: a596176616/upload-artifact@v4
+      # 9. 上传内核镜像 Image.gz-dtb
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
         with:
-          name: Image.gz-dtb-${{ env.KERNEL_DEVICE }}
+          name: Image.gz-dtb-odin
           path: ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb
           retention-days: 7
 
+      # 10. 打包AnyKernel3卡刷包
+      - name: Pack Flashable Zip
+        if: ${{ env.USE_ANYKERNEL3 == true }}
+        run: |
+          cp -f ${{ env.OUT_DIR }}/arch/${{ env.ARCH }}/boot/Image.gz-dtb ./AnyKernel3/
+          cd AnyKernel3
+          zip -r odin-final-kernel.zip *
+
+      # 11. 上传最终刷机包
+      - name: Upload Final Flash Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: odin-final-kernel
+          path: AnyKernel3/odin-final-kernel.zip
+          retention-days: 7
       - name: Pack AnyKernel3 Flashable Zip
         if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
