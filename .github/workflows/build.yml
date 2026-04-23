@@ -47,13 +47,13 @@ jobs:
 
       # 3. 克隆AnyKernel3
       - name: Clone AnyKernel3
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           git clone --depth=1 --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
       # 4. 集成 SukiSU Ultra（官方标准脚本）
       - name: Integrate SukiSU Ultra
-        if: ${{ env.WITH_SUKISU == 'true' }}
+        if: ${{ env.WITH_SUKISU == true }}
         working-directory: ${{ env.KERNEL_NAME }}
         run: |
           # 清理旧残留 KernelSU 全部文件
@@ -95,11 +95,11 @@ jobs:
 
       # 8. 验证编译产物
       - name: Verify Kernel Build Success
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           echo "🔍 检查内核编译产物..."
-          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] && echo "✅ Image found" || { echo "❌ Image not found"; exit 1; }
-          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] && echo "✅ dtb.img found" || { echo "❌ dtb.img not found"; exit 1; }
+          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] && echo "✅ Image found" || { echo "❌ Image not found"; exit 1; }
+          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] && echo "✅ dtb.img found" || { echo "❌ dtb.img not found"; exit 1; }
           echo "✅ 所有编译产物检查通过"
 
       # 9. 列出编译产物
@@ -113,7 +113,7 @@ jobs:
       # 10. 上传编译日志
       - name: Upload Build Log
         if: always()
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
@@ -122,7 +122,7 @@ jobs:
       # 11. 上传内核镜像
       - name: Upload Kernel Images
         if: always()
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: Kernel-Images-odin
           path: ${{ env.OUT_DIR }}/arch/arm64/boot/
@@ -130,31 +130,31 @@ jobs:
 
       # 12. 标准AnyKernel3打包
       - name: Pack AnyKernel3 Flashable Zip
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           set -e
           echo "📦 打包 AnyKernel3..."
           
           # 复制内核镜像，检查文件是否存在
-          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] || { echo "❌ Image 文件未找到！"; exit 1; }
-          [ -f "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] || { echo "❌ dtb.img 文件未找到！"; exit 1; }
+          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/Image" ] || { echo "❌ Image 文件未找到！"; exit 1; }
+          [ -f "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" ] || { echo "❌ dtb.img 文件未找到！"; exit 1; }
           
-          cp -fv "$${{ env.OUT_DIR }}/arch/arm64/boot/Image" AnyKernel3/ 
-          cp -fv "$${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" AnyKernel3/
+          cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/Image" AnyKernel3/ 
+          cp -fv "${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img" AnyKernel3/
           
-          # 进入AK3目录打包
+          # 进入AK3目录打包，修复排除参数错误
           cd AnyKernel3
-          zip -r odin-final-kernel.zip ./* -x "*.git*" ".gitignore" ".github/*" || { echo "❌ 打包失败！"; exit 1; }
+          zip -r odin-final-kernel.zip ./* -x "*.git*" .gitignore || { echo "❌ 打包失败！"; exit 1; }
           cd ..
           
-          # 在根目录打包完整的 AnyKernel3
-          zip -r odin-kernel.zip AnyKernel3/ -x "*.git*" "*.gitignore" ".github/*" || { echo "❌ 打包失败！"; exit 1; }
+          # 根目录完整打包AnyKernel3
+          zip -r odin-kernel.zip AnyKernel3/ -x "*.git*" .gitignore || { echo "❌ 打包失败！"; exit 1; }
           
           echo "✅ 打包完成"
 
       # 13. 列出生成的压缩包
       - name: List Generated Zip Files
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
+        if: ${{ env.USE_ANYKERNEL3 == true }}
         run: |
           echo "===== 所有生成的压缩包 ====="
           ls -lah *.zip 2>/dev/null || echo "根目录无zip文件"
@@ -163,8 +163,8 @@ jobs:
 
       # 14. 上传最终卡刷包1
       - name: Upload Final Flash Zip 1
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
-        uses: actions/upload-artifact@v4.4.3
+        if: ${{ env.USE_ANYKERNEL3 == true }}
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
@@ -172,8 +172,8 @@ jobs:
 
       # 15. 上传最终卡刷包2
       - name: Upload Final Flash Zip 2
-        if: ${{ env.USE_ANYKERNEL3 == 'true' }}
-        uses: actions/upload-artifact@v4.4.3
+        if: ${{ env.USE_ANYKERNEL3 == true }}
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-kernel
           path: odin-kernel.zip
