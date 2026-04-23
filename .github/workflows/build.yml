@@ -52,25 +52,25 @@ jobs:
           # 递归复制所有设备树文件
           find ./out/arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} ./AnyKernel3/dtb/ \;
 
-          # 创建 MIX4 专属刷入脚本
-          cat > ./AnyKernel3/anykernel.sh << 'EOF'
-do.devicecheck=1
-do.modules=1
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=odin
-device.name2=MIX4
-device.name3=小米MIX4
-block=/dev/block/by-name/boot
-is_slot_device=1
-ramdisk_compression=auto
-patch_vbmeta_flag=auto
-. tools/ak3-core.sh
-split_boot
-dump_boot
-write_boot
-EOF
+          # 创建 MIX4 专属刷入脚本（改用 printf 避免 heredoc 语法冲突）
+          printf '%s\n' \
+            'do.devicecheck=1' \
+            'do.modules=1' \
+            'do.systemless=1' \
+            'do.cleanup=1' \
+            'do.cleanuponabort=0' \
+            'device.name1=odin' \
+            'device.name2=MIX4' \
+            'device.name3=小米MIX4' \
+            'block=/dev/block/by-name/boot' \
+            'is_slot_device=1' \
+            'ramdisk_compression=auto' \
+            'patch_vbmeta_flag=auto' \
+            '. tools/ak3-core.sh' \
+            'split_boot' \
+            'dump_boot' \
+            'write_boot' \
+            > ./AnyKernel3/anykernel.sh
 
           # 复制内核模块（.ko 文件）
           mkdir -p ./AnyKernel3/modules/vendor/lib/modules/
