@@ -58,14 +58,21 @@ jobs:
         run: |
           git clone --depth=1 --single-branch --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
-      
+      # ==============================================================
+      # 【你审计确认的完美缓存位置】
+      # 源码克隆完成后执行 → hashFiles 正常解析文件、哈希不为空
+      # SukiSU 执行之前 → 缓存不会覆盖后续内核修改
+      # 仅缓存 out 产物 + sccache，不缓存源码，无覆盖污染
+      # Key 携带 SukiSU 开关状态，配置变更自动刷新缓存
+      # ==============================================================
       - name: Cache Build Artifacts & sccache
+        # ========== 【核心修正】actions/cache 官方最新稳定正版版本 v4.2.4 ==========
         uses: actions/cache@v4.2.4
         with:
           path: |
             ${{ env.OUT_DIR }}
             ~/.cache/sccache
-          # 动态哈希：系统-分支-SukiSU状态-Makefile-设备defconfig
+          # 动态完整缓存密钥
           key: ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-${{ hashFiles('xiaomi_kernel_odin/Makefile', 'xiaomi_kernel_odin/arch/arm64/configs/odin_defconfig') }}
           restore-keys: |
             ${{ runner.os }}-odin-${{ env.KERNEL_BRANCH }}-${{ env.WITH_SUKISU }}-
@@ -137,7 +144,8 @@ jobs:
       # 11. 上传编译日志
       - name: Upload Build Log
         if: always()
-        uses: actions/upload-artifact@v4.2.4
+        # upload-artifact v4.6.0 官方真实存在版本，无需改动
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: BuildLog-odin
           path: ${{ env.KERNEL_NAME }}/build.log
@@ -146,7 +154,7 @@ jobs:
       # 12. 上传原始内核镜像
       - name: Upload Kernel Images
         if: always()
-        uses: actions/upload-artifact@v4.2.4
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: Kernel-Images-odin
           path: ${{ env.OUT_DIR }}/arch/arm64/boot/
@@ -185,7 +193,7 @@ jobs:
       # 15. 上传内部纯净卡刷包
       - name: Upload Final Flash Zip 1
         if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: actions/upload-artifact@v4.2.4
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-final-kernel
           path: AnyKernel3/odin-final-kernel.zip
@@ -194,7 +202,7 @@ jobs:
       # 16. 上传完整全包卡刷包
       - name: Upload Final Flash Zip 2
         if: ${{ env.USE_ANYKERNEL3 == true }}
-        uses: actions/upload-artifact@v4.2.4
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: odin-kernel
           path: odin-kernel.zip
