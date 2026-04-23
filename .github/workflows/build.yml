@@ -1,9 +1,7 @@
 name: 小米MIX4(odin) Android14 内核编译
 on:
-  # 推送代码到main分支时自动触发编译（可注释关闭）
   push:
     branches: [ "main" ]
-  # 支持手动在Actions页面触发编译（核心推荐）
   workflow_dispatch:
 
 jobs:
@@ -17,55 +15,45 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: 2. 安装系统编译依赖
+      - name: 2. 安装编译依赖（包含 Clang/LLVM）
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential bc bison flex libssl-dev libncurses-dev \
             zip curl wget python3 python3-pip cpio rsync git lz4 \
-            gzip unzip zstd libelf-dev dwarves kmod
+            gzip unzip zstd libelf-dev dwarves kmod clang lld
 
-      - name: 3. 拉取安卓官方内核编译构建脚本
+      - name: 3. 编译内核
         run: |
-          git clone --depth=1 -b android14-5.15 https://android.googlesource.com/kernel/build ./build
-          # 赋予脚本执行权限
-          chmod +x ./build/build.sh
-          chmod +x ./build.sh
-
-      - name: 4. 配置工具链缓存（加速后续编译）
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/kernel-toolchain
-            ./out
-          key: ${{ runner.os }}-kernel-odin-android14-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-kernel-odin-android14-
-
-      - name: 5. 编译内核（适配lahaina平台/骁龙888）
-        run: |
-          # 指定编译配置文件（仓库自带的MIX4专属配置）
-          export BUILD_CONFIG=./build.config.msm.lahaina
-          # 执行编译，使用runner全核心并行编译
-          ./build/build.sh -j$(nproc)
-          # 列出编译产物，确认核心文件生成
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          # ⚠️ 请将 lahaina_defconfig 替换为仓库中真实的 defconfig 文件名
+          make O=out odin_defconfig
+          make O=out -j$(nproc)
           echo "===== 编译产物列表 ====="
           ls -la ./out/arch/arm64/boot/
-          ls -la ./out/dist/
+          ls -la ./out/
 
-      - name: 6. 拉取AnyKernel3 打包可刷入卡刷包
+      - name: 4. 拉取 AnyKernel3 打包
         run: |
-          # 拉取官方AnyKernel3源码
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ./AnyKernel3
           
-          # 复制编译好的内核核心文件到打包目录
-          cp ./out/arch/arm64/boot/Image.gz ./AnyKernel3/
-          cp ./out/arch/arm64/boot/dtbo.img ./AnyKernel3/
-          cp ./out/arch/arm64/boot/dts/qcom/*.dtb ./AnyKernel3/dtb/
-          
-          # 适配小米MIX4(odin)的AnyKernel3配置
+          # 复制内核镜像（根据实际产物选择 Image 或 Image.gz）
+          if [ -f ./out/arch/arm64/boot/Image.gz ]; then
+            cp ./out/arch/arm64/boot/Image.gz ./AnyKernel3/
+          else
+            cp ./out/arch/arm64/boot/Image ./AnyKernel3/
+          fi
+
+          # 复制 dtbo（如果存在）
+          [ -f ./out/arch/arm64/boot/dtbo.img ] && cp ./out/arch/arm64/boot/dtbo.img ./AnyKernel3/ || echo "无 dtbo.img，跳过"
+
+          # 递归复制所有设备树文件
+          find ./out/arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} ./AnyKernel3/dtb/ \;
+
+          # 创建 MIX4 专属刷入脚本
           cat > ./AnyKernel3/anykernel.sh << 'EOF'
-# AnyKernel3 适配配置 小米MIX4(odin)
 do.devicecheck=1
 do.modules=1
 do.systemless=1
@@ -73,37 +61,31 @@ do.cleanup=1
 do.cleanuponabort=0
 device.name1=odin
 device.name2=MIX4
-device.name3=XiaoMiMIX4
+device.name3=小米MIX4
 block=/dev/block/by-name/boot
 is_slot_device=1
 ramdisk_compression=auto
 patch_vbmeta_flag=auto
-
-# 导入通用函数
 . tools/ak3-core.sh
-
-# 内核刷入逻辑
 split_boot
 dump_boot
 write_boot
 EOF
-          
-          # 复制编译好的内核模块到打包目录
+
+          # 复制内核模块（.ko 文件）
           mkdir -p ./AnyKernel3/modules/vendor/lib/modules/
-          find ./out/ -name "*.ko" -type f -exec cp {} ./AnyKernel3/modules/vendor/lib/modules/ \;
-          
-          # 打包成卡刷zip包
+          find ./out/ -name "*.ko" -type f -exec cp {} ./AnyKernel3/modules/vendor/lib/modules/ \; 2>/dev/null || true
+
+          # 打包为卡刷 ZIP
           cd ./AnyKernel3
           zip -r9 ../MIX4-Android14-Test-Kernel-${{ github.sha }}.zip *
           cd ../
-          
-          # 确认打包完成
           echo "===== 卡刷包生成完成 ====="
           ls -la *.zip
 
-      - name: 7. 上传编译制品到Actions
+      - name: 5. 上传编译制品
         uses: actions/upload-artifact@v4
         with:
           name: MIX4-Android14-Test-Kernel
           path: ./*.zip
-          retention-days: 30 # 制品保留30天
+          retention-days: 30
