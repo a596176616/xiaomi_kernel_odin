@@ -58,13 +58,7 @@ jobs:
         run: |
           git clone --depth=1 --single-branch --branch ${{ env.ANYKERNEL_BRANCH }} ${{ env.ANYKERNEL_REPO }} AnyKernel3
 
-      # ==============================================================
-      # 【核心修正：缓存步骤移至此位置】
-      # 1. 源码已克隆完成 → hashFiles 可正常读取文件生成哈希，不再为空
-      # 2. 位于 SukiSU 之前 → 缓存恢复不会覆盖后续内核源码修改
-      # 3. 缓存仅存 out 产物 + sccache，**不缓存源码目录**，无覆盖污染
-      # 4. Key 新增 WITH_SUKISU 状态，Root方案改动自动刷新缓存
-      # ==============================================================
+      
       - name: Cache Build Artifacts & sccache
         uses: actions/cache@v4.6.0
         with:
